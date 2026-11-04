@@ -9,7 +9,7 @@ const REDUCED = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce
 
 /* ---------- dọn dẹp khi chuyển màn ---------- */
 let cleanups = [];
-function cleanup() { cleanups.forEach(f => { try { f(); } catch (e) { } }); cleanups = []; try { speechSynthesis.cancel(); } catch (e) { } }
+function cleanup() { cleanups.forEach(f => { try { f(); } catch (e) { } }); cleanups = []; stopSpeak(); }
 function later(fn, ms) { const id = setTimeout(fn, ms); cleanups.push(() => clearTimeout(id)); return id; }
 
 /* ---------- tiến độ (lưu trên máy) ---------- */
@@ -48,11 +48,48 @@ function speak(html) {
       .replace(/=/g, ' bằng ').replace(/>/g, ' lớn hơn ').replace(/</g, ' bé hơn ').replace(/\?/g, ' mấy? ')
       .replace(/°/g, ' độ').replace(/(\d+)\/(\d+)/g, '$1 phần $2').replace(/(\w)²/g, '$1 vuông').replace(/(\d)\s?kg\b/g, '$1 ki-lô-gam').replace(/(\d)\s?l\b/g, '$1 lít').replace(/(\d)\s?cm\b/g, '$1 xăng-ti-mét')
       .replace(/(\d)\s?dm\b/g, '$1 đề-xi-mét').replace(/(\d)\s?km\b/g, '$1 ki-lô-mét').replace(/(\d)\s?m\b/g, '$1 mét');
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(t); u.lang = 'vi-VN'; u.rate = .9;
-    const v = speechSynthesis.getVoices().find(v => /^vi/i.test(v.lang)); if (v) u.voice = v;
-    speechSynthesis.speak(u);
+    stopSpeak();
+    const v = viVoice();
+    if (v) {
+      const u = new SpeechSynthesisUtterance(t); u.lang = 'vi-VN'; u.rate = .9; u.voice = v;
+      speechSynthesis.speak(u);
+    } else speakOnline(t);
   } catch (e) { }
+}
+/* máy không có giọng tiếng Việt → đọc bằng giọng Việt trực tuyến thay vì giọng tiếng Anh */
+function viVoice() {
+  try { return speechSynthesis.getVoices().find(v => /^vi([-_]|$)/i.test(v.lang)) || null; } catch (e) { return null; }
+}
+/* Google chặn giọng đọc nếu biết yêu cầu đến từ trang khác → không gửi địa chỉ trang */
+try { const m = document.createElement('meta'); m.name = 'referrer'; m.content = 'no-referrer'; document.head.appendChild(m); } catch (e) { }
+let ttsAudio = null, ttsRun = 0;
+function stopSpeak() {
+  ttsRun++;
+  if (ttsAudio) { try { ttsAudio.pause(); } catch (e) { } ttsAudio = null; }
+  try { speechSynthesis.cancel(); } catch (e) { }
+}
+function speakOnline(t) {
+  const parts = [];
+  t.split(/(?<=[.!?,;])\s+/).forEach(s => {
+    while (s.length > 180) { let i = s.lastIndexOf(' ', 180); if (i < 1) i = 180; parts.push(s.slice(0, i)); s = s.slice(i).trim(); }
+    if (s.trim()) parts.push(s.trim());
+  });
+  const run = ttsRun;
+  let played = false;
+  const fallback = () => {
+    if (run !== ttsRun) return;
+    ttsAudio = null;
+    try { const u = new SpeechSynthesisUtterance(t); u.lang = 'vi-VN'; u.rate = .9; speechSynthesis.speak(u); } catch (e) { }
+  };
+  const next = i => {
+    if (run !== ttsRun || i >= parts.length) return;
+    const a = new Audio('https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&ttsspeed=0.9&q=' + encodeURIComponent(parts[i]));
+    ttsAudio = a; a.onended = () => next(i + 1);
+    a.onerror = () => played ? next(i + 1) : fallback();
+    a.onplaying = () => { played = true; };
+    a.play().catch(err => { if (!played && err && err.name !== 'AbortError') fallback(); });
+  };
+  next(0);
 }
 function confetti(n = 50) {
   if (REDUCED) return;
